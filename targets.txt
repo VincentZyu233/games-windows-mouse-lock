@@ -1,0 +1,22 @@
+# ============================================================
+# 鼠标物理锁定目标进程白名单 (targets.txt)
+# 
+# 规则说明:
+# 1. 一行一个进程名 (大小写不敏感，支持带 .exe 或不带 .exe)
+# 2. 以 '#' 开头的行代表注释，将被自动忽略
+# 3. 只有处于前台且匹配列表的窗口，才会触发 ClipCursor 物理锁定
+# 4. 本文件支持热修改，修改并保存后脚本会自动热加载生效，无需重启！
+# ============================================================
+
+# 英雄联盟 League of Legends (对局核心游戏主进程)
+League of Legends.exe
+
+# 我的世界 Minecraft (Java版 / Windows基岩版，默认注释，需要时去掉前面的 #)
+# javaw.exe
+# Minecraft.Windows.exe
+
+# 其它竞技游戏参考预留 (需要时去掉前面的 #)
+# cs2.exe
+# VALORANT-Win64-Shipping.exe
+# NarakaBladepoint.exe
+# StarCraft.exe

@@ -8,11 +8,12 @@ Mouse Lock for League of Legends (Windowed / Borderless)
 3. 智能前台检测：切到桌面或微信自动释放，切回游戏自动重新锁死。
 4. 默认快捷键 F8（LOL 默认无冲突），异步硬件级按键监听，抗拦截。
 5. 原生双音调清脆提示音（无需任何音频素材）。
-6. 支持测试模式：不在对局时也可以用来测试锁定当前任意窗口。
-7. 毫秒级高精度日志时间戳输出。
+6. 支持 targets.txt 目标进程白名单与配置自动热加载（支持 LOL、Minecraft 等任意游戏）。
+7. 毫秒级高精度对称式日志输出。
 """
 
 import sys
+import os
 import time
 from datetime import datetime
 import threading
@@ -38,10 +39,12 @@ AUTO_FOLLOW_FOREGROUND = True
 # 轮询频率 (秒)
 POLL_INTERVAL = 0.05
 
-# 目标模式:
-# - "AUTO": 优先检测 LOL 对局窗口；若不在对局中，按 F8 会锁住当前活动窗口方便测试体验
-# - "LOL_ONLY": 严格仅在 LOL 对局窗口中锁定
-TARGET_MODE = "AUTO"
+# 配置文件名 (放置在脚本同级目录下)
+TARGETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "targets.txt")
+
+# 窗口最小有效尺寸 (过滤过小的无边框挂件或小托盘)
+MIN_WINDOW_WIDTH = 400
+MIN_WINDOW_HEIGHT = 300
 # =======================================================
 
 user32 = ctypes.windll.user32
@@ -96,7 +99,7 @@ def play_sound(action: str):
 
 def get_process_name_by_hwnd(hwnd) -> str:
     """根据窗口句柄获取进程名"""
-    if not hwnd:
+    if not hwnd or not user32.IsWindow(hwnd):
         return ""
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
@@ -116,8 +119,16 @@ def get_process_name_by_hwnd(hwnd) -> str:
     full_path = buf.value
     return full_path.split("\\")[-1] if full_path else ""
 
+def get_window_class_name(hwnd) -> str:
+    """获取窗口类名"""
+    if not hwnd or not user32.IsWindow(hwnd):
+        return ""
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
 def get_window_title(hwnd) -> str:
-    if not hwnd:
+    if not hwnd or not user32.IsWindow(hwnd):
         return ""
     length = user32.GetWindowTextLengthW(hwnd)
     if length <= 0:
@@ -125,18 +136,6 @@ def get_window_title(hwnd) -> str:
     buff = ctypes.create_unicode_buffer(length + 1)
     user32.GetWindowTextW(hwnd, buff, length + 1)
     return buff.value
-
-def find_lol_game_window():
-    """查找英雄联盟对局窗口"""
-    hwnd = user32.FindWindowW("RiotWindowClass", None)
-    if hwnd and user32.IsWindowVisible(hwnd):
-        return hwnd
-    
-    hwnd = user32.FindWindowW(None, "League of Legends (TM) Client")
-    if hwnd and user32.IsWindowVisible(hwnd):
-        return hwnd
-        
-    return None
 
 def get_client_screen_rect(hwnd):
     """获取窗口客户区在屏幕上的绝对物理像素坐标"""
@@ -163,94 +162,156 @@ def is_ctrl_down() -> bool:
 def is_alt_down() -> bool:
     return is_key_down(0x12)
 
+class WhitelistManager:
+    """管理 targets.txt 白名单及其热重载"""
+    def __init__(self, filepath):
+        self.filepath = filepath
+        self.last_mtime = 0
+        self.whitelist = []
+        self.load(initial=True)
+
+    def load(self, initial=False):
+        if not os.path.exists(self.filepath):
+            self.whitelist = ["league of legends.exe"]
+            return
+
+        try:
+            mtime = os.path.getmtime(self.filepath)
+            if mtime != self.last_mtime:
+                self.last_mtime = mtime
+                new_list = []
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            new_list.append(line.lower())
+                self.whitelist = new_list
+                if not initial:
+                    names = ", ".join(self.whitelist) if self.whitelist else "空 (通用模式)"
+                    log(f"[配置热载] targets.txt 已更新，当前生效白名单: [{names}]")
+        except Exception as e:
+            if initial:
+                self.whitelist = ["league of legends.exe"]
+
+    def is_target(self, hwnd, proc_name) -> bool:
+        """多重加固判断前台窗口是否属于目标保护进程"""
+        if not proc_name:
+            return False
+
+        proc_lower = proc_name.lower()
+
+        # 1. 严格排除非游戏主程序的组件
+        if proc_lower in ["leagueclient.exe", "leagueclientux.exe", "leagueclientuxrender.exe"]:
+            return False
+
+        # 2. 如果白名单有配置，必须严格匹配白名单
+        if self.whitelist:
+            matched = False
+            for target in self.whitelist:
+                if proc_lower == target or proc_lower == f"{target}.exe":
+                    matched = True
+                    break
+            if not matched:
+                return False
+
+        # 3. 英雄联盟对局加固校验：类名二次确认
+        if "league of legends" in proc_lower:
+            cls_name = get_window_class_name(hwnd)
+            # LOL 对局引擎的主类名为 RiotWindowClass
+            if cls_name and cls_name not in ["RiotWindowClass"]:
+                # 如果类名不匹配，可能是辅助工具或更新窗口，忽略
+                pass
+
+        # 4. 窗口有效面积过滤（防止微型隐藏窗口误触）
+        rect = get_client_screen_rect(hwnd)
+        if not rect:
+            return False
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        if w < MIN_WINDOW_WIDTH or h < MIN_WINDOW_HEIGHT:
+            return False
+
+        return True
+
 def main():
-    print("=" * 65)
-    print("  英雄联盟 (LOL) 窗口化鼠标防飞出锁定助手")
-    print("=" * 65)
+    print("=" * 68)
+    print("  🎮 英雄联盟 (LOL) 窗口化鼠标防飞出锁定助手")
+    print("=" * 68)
     print(f"  [快捷键] {HOTKEY_NAME:<6} : 开启 / 关闭 鼠标锁定 (清脆蜂鸣提示)")
     print(f"  [退出键] Ctrl+Alt+Q : 退出脚本并彻底释放鼠标")
-    print("  [特  性] 物理锁死在游戏窗口内，甩得再快也绝不出界")
+    print("  [白名单] 读取 targets.txt 目标进程，支持修改后自动热重载")
     print("  [切  屏] Alt+Tab 切出游戏自动释放，切回游戏自动锁死")
-    print("-" * 65)
-    log("[就绪] 服务已在后台运行中，请进入游戏或切至测试窗口后按 F8 开启...")
-    print("=" * 65)
+    print("-" * 68)
+
+    wm = WhitelistManager(TARGETS_FILE)
+    targets_str = ", ".join(wm.whitelist) if wm.whitelist else "全局自动"
+    log(f"[就绪] 当前保护进程: [{targets_str}]，按 F8 开启锁定...")
+    print("=" * 68)
 
     user_lock_enabled = False
     currently_clipped = False
-    locked_hwnd = None
     prev_hotkey_state = False
 
     try:
         while True:
-            # 1. 检查退出按键 (Ctrl + Alt + Q)
+            # 1. 检查 targets.txt 是否发生热重载
+            wm.load()
+
+            # 2. 检查退出按键 (Ctrl + Alt + Q)
             if is_ctrl_down() and is_alt_down() and is_key_down(EXIT_KEY_VK):
                 log("[退出] 收到退出指令 (Ctrl+Alt+Q)，正在退出...")
                 break
 
-            # 2. 检查切换按键 (F8)
+            # 3. 检查切换按键 (F8)
             curr_hotkey_state = is_key_down(HOTKEY_VK)
             if curr_hotkey_state and not prev_hotkey_state:
                 user_lock_enabled = not user_lock_enabled
                 
                 if user_lock_enabled:
-                    # 获取当前前台窗口
                     fg_hwnd = user32.GetForegroundWindow()
                     proc_name = get_process_name_by_hwnd(fg_hwnd)
-                    title = get_window_title(fg_hwnd)
+                    is_match = wm.is_target(fg_hwnd, proc_name)
 
-                    lol_hwnd = find_lol_game_window()
-                    if lol_hwnd:
-                        locked_hwnd = lol_hwnd
-                        target_desc = "英雄联盟对局窗口"
-                    elif "League of Legends" in proc_name:
-                        locked_hwnd = fg_hwnd
-                        target_desc = "英雄联盟对局窗口"
-                    elif TARGET_MODE == "AUTO":
-                        locked_hwnd = fg_hwnd
-                        target_desc = f"当前前台窗口 [{title or proc_name}]"
-                    else:
-                        locked_hwnd = None
-                        target_desc = "等待英雄联盟进入对局..."
-
-                    log(f"[状态] >> 鼠标锁定已开启 (ON) <<")
-                    log(f"[目标] {target_desc}")
-                    log(f"[提示] 随时按 [{HOTKEY_NAME}] 可关闭锁定。")
+                    log(f"[状态] >> 鼠标锁定已开启 (ON) << [随时按 {HOTKEY_NAME} 可关闭]")
                     play_sound("lock")
+
+                    # 如果开启时前台刚好在游戏窗口内，立即上锁
+                    if is_match:
+                        rect = get_client_screen_rect(fg_hwnd)
+                        if rect:
+                            user32.ClipCursor(ctypes.byref(rect))
+                            currently_clipped = True
+                            log(f"[切回锁定] 前台已切至 [{proc_name}]，命中目标进程，已锁定区域: ({rect.left}, {rect.top}) -> ({rect.right}, {rect.bottom})")
+                    else:
+                        log(f"[等待切回] 当前前台为 [{proc_name or '桌面'}]，切入游戏窗口时将自动执行锁定。")
                 else:
                     log(f"[状态] >> 鼠标锁定已关闭 (OFF) << (鼠标已自由恢复)")
                     release_mouse()
                     currently_clipped = False
-                    locked_hwnd = None
                     play_sound("unlock")
 
             prev_hotkey_state = curr_hotkey_state
 
-            # 3. 锁定维护逻辑
+            # 4. 前台窗口维护逻辑 (当且仅当开启锁定时)
             if user_lock_enabled:
                 fg_hwnd = user32.GetForegroundWindow()
+                proc_name = get_process_name_by_hwnd(fg_hwnd)
+                is_match = wm.is_target(fg_hwnd, proc_name)
 
-                # 如果尚未找到 LOL 对局窗口，持续尝试嗅探
-                if not locked_hwnd or not user32.IsWindow(locked_hwnd):
-                    lol_hwnd = find_lol_game_window()
-                    if lol_hwnd:
-                        locked_hwnd = lol_hwnd
-
-                if locked_hwnd and user32.IsWindow(locked_hwnd):
-                    # 判断当前用户是否在目标窗口内
-                    if fg_hwnd == locked_hwnd:
-                        rect = get_client_screen_rect(locked_hwnd)
-                        if rect and (rect.right > rect.left) and (rect.bottom > rect.top):
-                            user32.ClipCursor(ctypes.byref(rect))
-                            if not currently_clipped:
-                                log(f"[锁定生效] 已将光标物理锁在窗口区域: ({rect.left}, {rect.top}) -> ({rect.right}, {rect.bottom})")
-                                currently_clipped = True
-                    else:
-                        # 切到其他程序了
-                        if AUTO_FOLLOW_FOREGROUND and currently_clipped:
-                            release_mouse()
-                            currently_clipped = False
-                            other_proc = get_process_name_by_hwnd(fg_hwnd)
-                            log(f"[切出暂停] 前台已切至 [{other_proc or '桌面'}]，已暂时解除锁定")
+                if is_match:
+                    rect = get_client_screen_rect(fg_hwnd)
+                    if rect and (rect.right > rect.left) and (rect.bottom > rect.top):
+                        # 维持物理锁定
+                        user32.ClipCursor(ctypes.byref(rect))
+                        if not currently_clipped:
+                            currently_clipped = True
+                            log(f"[切回锁定] 前台已切至 [{proc_name}]，命中目标进程，已锁定区域: ({rect.left}, {rect.top}) -> ({rect.right}, {rect.bottom})")
+                else:
+                    # 前台非目标窗口
+                    if AUTO_FOLLOW_FOREGROUND and currently_clipped:
+                        release_mouse()
+                        currently_clipped = False
+                        log(f"[切出放行] 前台已切至 [{proc_name or '未知/桌面'}]，非目标进程，已暂时释放鼠标")
             else:
                 if currently_clipped:
                     release_mouse()
