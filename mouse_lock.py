@@ -1,12 +1,12 @@
 """
-英雄联盟 (League of Legends) 窗口化鼠标防飞出锁定工具
-Mouse Lock for League of Legends (Windowed / Borderless)
+窗口化游戏鼠标防飞出物理锁定助手 (Games Window Mouse Lock)
+起源于英雄联盟 (LOL)，支持 Minecraft、CS2 等各类窗口化竞技游戏
 
 特点:
 1. 纯 Python 标准库实现，零外部依赖，直接用 uv run 或 python 启动。
 2. 使用 Win32 底层 ClipCursor API，驱动级限制鼠标移动范围，甩得再快也绝不出界。
 3. 智能前台检测：切到桌面或微信自动释放，切回游戏自动重新锁死。
-4. 默认快捷键 F8（LOL 默认无冲突），异步硬件级按键监听，抗拦截。
+4. 默认快捷键 F8，异步硬件级按键监听，抗游戏拦截。
 5. 原生双音调清脆提示音（无需任何音频素材）。
 6. 支持 targets.txt 目标进程白名单与配置自动热加载（支持 LOL、Minecraft 等任意游戏）。
 7. 毫秒级高精度对称式日志输出。
@@ -235,7 +235,8 @@ class WhitelistManager:
 
 def main():
     print("=" * 68)
-    print("  🎮 英雄联盟 (LOL) 窗口化鼠标防飞出锁定助手")
+    print("  🎮 窗口化游戏鼠标防飞出物理锁定助手 (Games Window Mouse Lock)")
+    print("     (起源于英雄联盟，支持 Minecraft、CS2 等各类窗口化竞技游戏)")
     print("=" * 68)
     print(f"  [快捷键] {HOTKEY_NAME:<6} : 开启 / 关闭 鼠标锁定 (清脆蜂鸣提示)")
     print(f"  [退出键] Ctrl+Alt+Q : 退出脚本并彻底释放鼠标")
