@@ -9,10 +9,12 @@ Mouse Lock for League of Legends (Windowed / Borderless)
 4. 默认快捷键 F8（LOL 默认无冲突），异步硬件级按键监听，抗拦截。
 5. 原生双音调清脆提示音（无需任何音频素材）。
 6. 支持测试模式：不在对局时也可以用来测试锁定当前任意窗口。
+7. 毫秒级高精度日志时间戳输出。
 """
 
 import sys
 import time
+from datetime import datetime
 import threading
 import atexit
 import ctypes
@@ -47,6 +49,16 @@ kernel32 = ctypes.windll.kernel32
 
 class POINT(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+def log(msg: str):
+    """输出带精确到毫秒级时间戳的日志行"""
+    now = datetime.now()
+    ts = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    for line in msg.splitlines():
+        if line.strip():
+            print(f"[{ts}] {line}")
+        else:
+            print()
 
 # 确保无论脚本怎样退出（正常退出/异常/Ctrl+C），必须彻底释放鼠标
 def release_mouse():
@@ -160,7 +172,7 @@ def main():
     print("  [特  性] 物理锁死在游戏窗口内，甩得再快也绝不出界")
     print("  [切  屏] Alt+Tab 切出游戏自动释放，切回游戏自动锁死")
     print("-" * 65)
-    print("  服务已在后台运行中，请进入游戏或切至测试窗口后按 F8 开启...")
+    log("[就绪] 服务已在后台运行中，请进入游戏或切至测试窗口后按 F8 开启...")
     print("=" * 65)
 
     user_lock_enabled = False
@@ -172,7 +184,7 @@ def main():
         while True:
             # 1. 检查退出按键 (Ctrl + Alt + Q)
             if is_ctrl_down() and is_alt_down() and is_key_down(EXIT_KEY_VK):
-                print("\n[退出] 收到退出指令 (Ctrl+Alt+Q)，正在退出...")
+                log("[退出] 收到退出指令 (Ctrl+Alt+Q)，正在退出...")
                 break
 
             # 2. 检查切换按键 (F8)
@@ -200,12 +212,12 @@ def main():
                         locked_hwnd = None
                         target_desc = "等待英雄联盟进入对局..."
 
-                    print(f"\n[状态] >> 鼠标锁定已开启 (ON) <<")
-                    print(f"       目标窗口: {target_desc}")
-                    print(f"       提示: 随时按 [{HOTKEY_NAME}] 可关闭锁定。")
+                    log(f"[状态] >> 鼠标锁定已开启 (ON) <<")
+                    log(f"[目标] {target_desc}")
+                    log(f"[提示] 随时按 [{HOTKEY_NAME}] 可关闭锁定。")
                     play_sound("lock")
                 else:
-                    print(f"\n[状态] >> 鼠标锁定已关闭 (OFF) << (鼠标已自由恢复)")
+                    log(f"[状态] >> 鼠标锁定已关闭 (OFF) << (鼠标已自由恢复)")
                     release_mouse()
                     currently_clipped = False
                     locked_hwnd = None
@@ -230,7 +242,7 @@ def main():
                         if rect and (rect.right > rect.left) and (rect.bottom > rect.top):
                             user32.ClipCursor(ctypes.byref(rect))
                             if not currently_clipped:
-                                print(f"[锁定生效] 已将光标物理锁在窗口区域: ({rect.left}, {rect.top}) -> ({rect.right}, {rect.bottom})")
+                                log(f"[锁定生效] 已将光标物理锁在窗口区域: ({rect.left}, {rect.top}) -> ({rect.right}, {rect.bottom})")
                                 currently_clipped = True
                     else:
                         # 切到其他程序了
@@ -238,7 +250,7 @@ def main():
                             release_mouse()
                             currently_clipped = False
                             other_proc = get_process_name_by_hwnd(fg_hwnd)
-                            print(f"[切出暂停] 前台已切至 [{other_proc or '桌面'}]，已暂时解除锁定")
+                            log(f"[切出暂停] 前台已切至 [{other_proc or '桌面'}]，已暂时解除锁定")
             else:
                 if currently_clipped:
                     release_mouse()
@@ -247,10 +259,10 @@ def main():
             time.sleep(POLL_INTERVAL)
 
     except KeyboardInterrupt:
-        print("\n[退出] 用户按下 Ctrl+C 退出程序")
+        log("[退出] 用户按下 Ctrl+C 退出程序")
     finally:
         release_mouse()
-        print("[完成] 鼠标限制已彻底解除，程序安全退出。")
+        log("[完成] 鼠标限制已彻底解除，程序安全退出。")
 
 if __name__ == "__main__":
     main()
